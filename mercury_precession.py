@@ -16,36 +16,48 @@ sim_years = 5.0
 num_steps = int(sim_years * year / dt)
 masses = np.array([M_mercury, M_sun])
 EPSILON = 1e-20
-eta = np.diag([-1, 1, 1, 1])
 
 def compute_four_accelerations(pos, vel, masses):
+    """
+    Compute four-accelerations in pre-projection 4D Euclidean space.
+    
+    Parameters:
+    - pos: (n, 4) array of positions [x0, x1, x2, x3]
+    - vel: (n, 4) array of velocities [v0, v1, v2, v3]
+    - masses: (n,) array of particle masses
+    
+    Returns:
+    - acc: (n, 4) array of four-accelerations
+    """
     n = len(masses)
-    acc = np.zeros((n, 4))
-    R_ij = pos[:, None, :] - pos  # Position differences (n x n x 4)
-    r_4d = np.sqrt(np.abs(np.einsum('ijk,kl,ijl->ij', R_ij, eta, R_ij))) + EPSILON  # 4D distances (n x n)
+    acc = np.zeros((n, 4))  # Four-acceleration array
 
     for i in range(n):
-        r_vec = pos[i] - pos  # Position vector relative to particle i (n x 4)
-        r_spatial = np.sqrt(np.abs(np.einsum('ij,jk,ik->i', r_vec, eta, r_vec))) + EPSILON  # Spatial distances (n)
-        v_rel = vel[i] - vel  # Relative velocities (n x 4)
-        v_sq = np.einsum('ij,jk,ik->i', v_rel, eta, v_rel)  # v_rel^2 (n)
-        r_dot_v = np.einsum('ij,jk,ik->i', r_vec, eta, v_rel)  # r_ij · v_rel (n)
-        mass_prod = masses[i] * masses  # m_i * m_j (n)
-
-        # New analytical form of F_i^mu (Equation 39 from Section 7)
-        F_total = (
-            -G * mass_prod[:, None] * r_vec / r_spatial[:, None]**3  # Newtonian term
-            + (G * mass_prod[:, None] / (c**2 * r_spatial[:, None]**3)) * (
-                (4 * G * masses / r_spatial - v_sq)[:, None] * r_vec  # Position-dependent relativistic term
-                + 4 * r_dot_v[:, None] * v_rel  # Velocity-dependent relativistic term
-            )
-        )
-
-        # Mask to exclude self-interaction (i != j)
-        mask = (np.arange(n) != i)[:, None]
-        F_total = np.sum(F_total * mask, axis=0)  # Sum over j != i (4)
-
-        acc[i] = F_total / masses[i]  # Acceleration (4)
+        F_total = np.zeros(4)  # Total four-force on particle i
+        for j in range(n):
+            if i != j:
+                # Spatial separation (x1, x2, x3 components)
+                r_vec_spatial = pos[i, 1:] - pos[j, 1:]
+                r_spatial = np.sqrt(np.sum(r_vec_spatial**2)) + EPSILON
+                
+                # Newtonian force (spatial components only)
+                F_newton = -G * masses[i] * masses[j] * r_vec_spatial / r_spatial**3
+                
+                # Optional: Simplified post-Newtonian correction
+                v_rel = vel[i] - vel[j]
+                v_sq = np.sum(v_rel**2)  # Euclidean norm in 4D
+                r_dot_v = np.sum(r_vec_spatial * v_rel[1:])  # Spatial dot product
+                F_pn = (G * masses[i] * masses[j] / (c**2 * r_spatial**3)) * (
+                    (4 * G * masses[j] / r_spatial - v_sq) * r_vec_spatial
+                    + 4 * r_dot_v * v_rel[1:]
+                )
+                
+                # Add to spatial components (F^0 = 0)
+                F_total[1:] += F_newton + F_pn
+        
+        # Four-acceleration: a^\mu = f^\mu / m
+        acc[i] = F_total / masses[i]
+    
     return acc
 
 def update_particles(pos, vel, masses, dt):
@@ -75,6 +87,7 @@ times = []
 for i in range(1, num_steps):
     pos, vel = update_particles(pos, vel, masses, dt)
     history[i] = pos.copy()
+    eta = np.eye(4)
     radii[i] = np.sqrt(np.abs(np.einsum('i,ij,j->', pos[0] - pos[1], eta, pos[0] - pos[1])))
     if i > 1 and radii[i] > radii[i-1] and radii[i-1] < radii[i-2]:
         t_vals = np.array([i-2, i-1, i]) * dt
