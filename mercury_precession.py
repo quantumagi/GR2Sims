@@ -18,48 +18,37 @@ masses = np.array([M_mercury, M_sun])
 EPSILON = 1e-20
 
 def compute_four_accelerations(pos, vel, masses):
-    """
-    Compute four-accelerations in pre-projection 4D Euclidean space.
-    
-    Parameters:
-    - pos: (n, 4) array of positions [x0, x1, x2, x3]
-    - vel: (n, 4) array of velocities [v0, v1, v2, v3]
-    - masses: (n,) array of particle masses
-    
-    Returns:
-    - acc: (n, 4) array of four-accelerations
-    """
     n = len(masses)
-    acc = np.zeros((n, 4))  # Four-acceleration array
+    acc = np.zeros((n, 4))
+    R_ij = pos[:, None, :] - pos  # Position differences (n x n x 4)
+    r_4d = np.sqrt(np.abs(np.einsum('ijk,kl,ijl->ij', R_ij, eta, R_ij))) + EPSILON  # 4D distances (n x n)
 
     for i in range(n):
-        F_total = np.zeros(4)  # Total four-force on particle i
-        for j in range(n):
-            if i != j:
-                # Spatial separation (x1, x2, x3 components)
-                r_vec_spatial = pos[i, 1:] - pos[j, 1:]
-                r_spatial = np.sqrt(np.sum(r_vec_spatial**2)) + EPSILON
-                
-                # Newtonian force (spatial components only)
-                F_newton = -G * masses[i] * masses[j] * r_vec_spatial / r_spatial**3
-                
-                # Optional: Simplified post-Newtonian correction
-                v_rel = vel[i] - vel[j]
-                v_sq = np.sum(v_rel**2)  # Euclidean norm in 4D
-                r_dot_v = np.sum(r_vec_spatial * v_rel[1:])  # Spatial dot product
-                F_pn = (G * masses[i] * masses[j] / (c**2 * r_spatial**3)) * (
-                    (4 * G * masses[j] / r_spatial - v_sq) * r_vec_spatial
-                    + 4 * r_dot_v * v_rel[1:]
-                )
-                
-                # Add to spatial components (F^0 = 0)
-                F_total[1:] += F_newton + F_pn
-        
-        # Four-acceleration: a^\mu = f^\mu / m
-        acc[i] = F_total / masses[i]
-    
+        r_vec = pos[i] - pos  # Position vector relative to particle i (n x 4)
+        r_spatial = np.linalg.norm(r_vec, axis=1) + EPSILON  # Spatial distances (n)
+        v_rel = vel[i] - vel  # Relative velocities (n x 4)
+        v_sq = np.sum(v_rel**2, axis=1)  # v_rel^2 (n)
+        r_dot_v = np.sum(r_vec * v_rel, axis=1)  # r_ij · v_rel (n)
+        mass_prod = masses[i] * masses  # m_i * m_j (n)
+
+        # Updated analytical form of F_i^mu (Equation 39 from Section 7)
+        # The extra factors of 4 have been removed per the new derivation.
+        F_total = (
+            -G * mass_prod[:, None] * r_vec / r_spatial[:, None]**3  # Newtonian term
+            + (G * mass_prod[:, None] / (c**2 * r_spatial[:, None]**3)) * (
+                (G * masses / r_spatial - v_sq)[:, None] * r_vec  # Position-dependent relativistic term
+                + r_dot_v[:, None] * v_rel  # Velocity-dependent relativistic term
+            )
+        )
+
+        # Mask to exclude self-interaction (i != j)
+        mask = (np.arange(n) != i)[:, None]
+        F_total = np.sum(F_total * mask, axis=0)  # Sum over j != i (4)
+
+        acc[i] = F_total / masses[i]  # Acceleration (4)
     return acc
 
+    
 def update_particles(pos, vel, masses, dt):
     acc = compute_four_accelerations(pos, vel, masses)
     vel += acc * dt
@@ -84,6 +73,7 @@ history[0] = pos.copy()
 radii[0] = np.sqrt(np.abs(np.einsum('i,ij,j->', pos[0] - pos[1], eta, pos[0] - pos[1])))
 angles = []
 times = []
+print("Perihelia (time, radius, angle):");
 for i in range(1, num_steps):
     pos, vel = update_particles(pos, vel, masses, dt)
     history[i] = pos.copy()
@@ -94,14 +84,16 @@ for i in range(1, num_steps):
         r_vals = radii[i-2:i+1]
         coeffs = np.polyfit(t_vals, r_vals, 2)
         t_min = -coeffs[1] / (2 * coeffs[0])
-        alpha = (t_min - t_vals[1]) / dt
-        pos_rel_prev = history[i-1, 0, 1:] - history[i-1, 1, 1:]
-        pos_rel_curr = history[i, 0, 1:] - history[i, 1, 1:]
-        pos_min = (1 - alpha) * pos_rel_prev + alpha * pos_rel_curr
-        angle = np.arctan2(pos_min[1], pos_min[0])
-        angles.append(angle)
-        times.append(t_min / year)
-        print(f"Perihelion at t={t_min/year:.6f} years, r={r_vals.min():.10f}, angle={angle:.10f}")
+        t = t_min/year
+        if len(times) == 0 or (times[-1] + 0.4) < t:
+            alpha = (t_min - t_vals[1]) / dt
+            pos_rel_prev = history[i-1, 0, 1:] - history[i-1, 1, 1:]
+            pos_rel_curr = history[i, 0, 1:] - history[i, 1, 1:]
+            pos_min = (1 - alpha) * pos_rel_prev + alpha * pos_rel_curr
+            angle = np.arctan2(pos_min[1], pos_min[0])
+            angles.append(angle)
+            times.append(t)
+            print(f"t={t_min/year:.6f} years, r={r_vals.min():.2f}, angle={angle:.10f}")
 if len(angles) > 1:
     angles = np.unwrap(angles)
     delta_phi = angles[-1] - angles[0]
@@ -114,4 +106,3 @@ if len(angles) > 1:
     print(f"Total precession: {delta_phi:.10f} rad")
     print(f"Precession per orbit: {precession_per_orbit:.10f} rad")
     print(f"Precession: {precession_arcsec:.2f} arcsec/century")
-    print("Perihelion angles:", angles)
