@@ -50,8 +50,6 @@ plt.tight_layout()
 def compute_four_accelerations(pos, vel, masses):
     n = len(masses)
     acc = np.zeros((n, 4))
-    R_ij = pos[:, None, :] - pos  # Position differences (n x n x 4)
-    r_4d = np.sqrt(np.abs(np.einsum('ijk,kl,ijl->ij', R_ij, eta, R_ij))) + EPSILON  # 4D distances (n x n)
 
     for i in range(n):
         r_vec = pos[i] - pos  # Position vector relative to particle i (n x 4)

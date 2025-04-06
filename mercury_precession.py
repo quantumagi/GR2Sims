@@ -20,8 +20,6 @@ EPSILON = 1e-20
 def compute_four_accelerations(pos, vel, masses):
     n = len(masses)
     acc = np.zeros((n, 4))
-    R_ij = pos[:, None, :] - pos  # Position differences (n x n x 4)
-    r_4d = np.sqrt(np.abs(np.einsum('ijk,kl,ijl->ij', R_ij, eta, R_ij))) + EPSILON  # 4D distances (n x n)
 
     for i in range(n):
         r_vec = pos[i] - pos  # Position vector relative to particle i (n x 4)
@@ -70,6 +68,7 @@ v1_3d = np.array([0, - (M_mercury / M_sun) * v0 / 2, 0])
 gamma_1 = 1 / np.sqrt(1 - (v0 / c)**2)
 vel[1] = [gamma_1 * c, *v1_3d]
 history[0] = pos.copy()
+eta = np.diag([-1, 1, 1, 1])
 radii[0] = np.sqrt(np.abs(np.einsum('i,ij,j->', pos[0] - pos[1], eta, pos[0] - pos[1])))
 angles = []
 times = []
