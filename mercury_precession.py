@@ -18,34 +18,29 @@ masses = np.array([M_mercury, M_sun])
 EPSILON = 1e-20
 
 def compute_four_accelerations(pos, vel, masses):
+    # pos, vel: (n,3) spatial only
     n = len(masses)
-    acc = np.zeros((n, 4))
+    r_vec = pos[:,None,:] - pos[None,:,:]            # (n,n,3)
+    r_mag = np.linalg.norm(r_vec, axis=2) + EPSILON  # (n,n)
+    v_rel = vel[:,None,:] - vel[None,:,:]            # (n,n,3)
+    v_sq  = np.sum(v_rel**2, axis=2)                 # (n,n)
+    r_dot_v = np.einsum('ijk,ijk->ij', r_vec, v_rel) # (n,n)
 
-    for i in range(n):
-        r_vec = pos[i] - pos  # Position vector relative to particle i (n x 4)
-        r_spatial = np.linalg.norm(r_vec, axis=1) + EPSILON  # Spatial distances (n)
-        v_rel = vel[i] - vel  # Relative velocities (n x 4)
-        v_sq = np.sum(v_rel**2, axis=1)  # v_rel^2 (n)
-        r_dot_v = np.sum(r_vec * v_rel, axis=1)  # r_ij · v_rel (n)
-        mass_prod = masses[i] * masses  # m_i * m_j (n)
+    mass_prod = masses[:,None] * masses[None,:]      # (n,n)
+    phi = G * masses[None,:] / r_mag                 # (n,n)
 
-        # Updated analytical form of F_i^mu (Equation 39 from Section 7)
-        # The extra factors of 4 have been removed per the new derivation.
-        F_total = (
-            -G * mass_prod[:, None] * r_vec / r_spatial[:, None]**3  # Newtonian term
-            + (G * mass_prod[:, None] / (c**2 * r_spatial[:, None]**3)) * (
-                (G * masses / r_spatial - v_sq)[:, None] * r_vec  # Position-dependent relativistic term
-                + r_dot_v[:, None] * v_rel  # Velocity-dependent relativistic term
-            )
-        )
+    # Newtonian
+    F_newt = -G * mass_prod[...,None] * r_vec / r_mag[...,None]**3
 
-        # Mask to exclude self-interaction (i != j)
-        mask = (np.arange(n) != i)[:, None]
-        F_total = np.sum(F_total * mask, axis=0)  # Sum over j != i (4)
+    # 1PN corrections
+    F_1PN_pos = (4 * phi - v_sq)[...,None] * r_vec
+    F_1PN_vel = 4 * r_dot_v[...,None] * v_rel
+    F_1PN = (G * mass_prod[...,None] / c**2
+             / r_mag[...,None]**3) * (F_1PN_pos + F_1PN_vel)
 
-        acc[i] = F_total / masses[i]  # Acceleration (4)
-    return acc
-
+    # Total spatial force, summing over j ≠ i
+    F_total = np.sum(F_newt + F_1PN, axis=1)         # (n,3)
+    return F_total / masses[:,None]                  # (n,3)
     
 def update_particles(pos, vel, masses, dt):
     acc = compute_four_accelerations(pos, vel, masses)
@@ -84,21 +79,21 @@ for i in range(1, num_steps):
         coeffs = np.polyfit(t_vals, r_vals, 2)
         t_min = -coeffs[1] / (2 * coeffs[0])
         t = t_min/year
-        if len(times) == 0 or (times[-1] + 0.4) < t:
-            alpha = (t_min - t_vals[1]) / dt
-            pos_rel_prev = history[i-1, 0, 1:] - history[i-1, 1, 1:]
-            pos_rel_curr = history[i, 0, 1:] - history[i, 1, 1:]
-            pos_min = (1 - alpha) * pos_rel_prev + alpha * pos_rel_curr
-            angle = np.arctan2(pos_min[1], pos_min[0])
-            angles.append(angle)
-            times.append(t)
-            print(f"t={t_min/year:.6f} years, r={r_vals.min():.2f}, angle={angle:.10f}")
+        alpha = (t_min - t_vals[1]) / dt
+        pos_rel_prev = history[i-1, 0, 1:] - history[i-1, 1, 1:]
+        pos_rel_curr = history[i, 0, 1:] - history[i, 1, 1:]
+        pos_min = (1 - alpha) * pos_rel_prev + alpha * pos_rel_curr
+        angle = np.arctan2(pos_min[1], pos_min[0])
+        angles.append(angle)
+        times.append(t)
+        print(f"t={t:.6f} years, r={r_vals.min():.2f}, angle={angle:.10f}")
 if len(angles) > 1:
     angles = np.unwrap(angles)
-    delta_phi = angles[-1] - angles[0]
-    orbits = len(angles) - 1
-    precession_per_orbit = delta_phi / orbits
+    delta_phi = angles[-1] - angles[0] 
+    delta_time = times[-1] - times[0]
     orbital_period = 87.969 / 365.25
+    orbits = delta_time / orbital_period
+    precession_per_orbit = delta_phi / orbits
     orbits_per_century = 100 / orbital_period
     precession_arcsec = precession_per_orbit * orbits_per_century * (180 / np.pi) * 3600
     print(f"Orbits detected: {orbits}")

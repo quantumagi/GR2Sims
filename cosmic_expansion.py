@@ -48,33 +48,29 @@ axs[1, 1].set_ylabel('Average Radial Distance (m)')
 plt.tight_layout()
 
 def compute_four_accelerations(pos, vel, masses):
+    # pos, vel: (n,3) spatial only
     n = len(masses)
-    acc = np.zeros((n, 4))
+    r_vec = pos[:,None,:] - pos[None,:,:]            # (n,n,3)
+    r_mag = np.linalg.norm(r_vec, axis=2) + EPSILON  # (n,n)
+    v_rel = vel[:,None,:] - vel[None,:,:]            # (n,n,3)
+    v_sq  = np.sum(v_rel**2, axis=2)                 # (n,n)
+    r_dot_v = np.einsum('ijk,ijk->ij', r_vec, v_rel) # (n,n)
 
-    for i in range(n):
-        r_vec = pos[i] - pos  # Position vector relative to particle i (n x 4)
-        r_spatial = np.linalg.norm(r_vec, axis=1) + EPSILON  # Spatial distances (n)
-        v_rel = vel[i] - vel  # Relative velocities (n x 4)
-        v_sq = np.sum(v_rel**2, axis=1)  # v_rel^2 (n)
-        r_dot_v = np.sum(r_vec * v_rel, axis=1)  # r_ij · v_rel (n)
-        mass_prod = masses[i] * masses  # m_i * m_j (n)
+    mass_prod = masses[:,None] * masses[None,:]      # (n,n)
+    phi = G * masses[None,:] / r_mag                 # (n,n)
 
-        # Updated analytical form of F_i^mu (Equation 39 from Section 7)
-        # The extra factors of 4 have been removed per the new derivation.
-        F_total = (
-            -G * mass_prod[:, None] * r_vec / r_spatial[:, None]**3  # Newtonian term
-            + (G * mass_prod[:, None] / (c**2 * r_spatial[:, None]**3)) * (
-                (G * masses / r_spatial - v_sq)[:, None] * r_vec  # Position-dependent relativistic term
-                + r_dot_v[:, None] * v_rel  # Velocity-dependent relativistic term
-            )
-        )
+    # Newtonian
+    F_newt = -G * mass_prod[...,None] * r_vec / r_mag[...,None]**3
 
-        # Mask to exclude self-interaction (i != j)
-        mask = (np.arange(n) != i)[:, None]
-        F_total = np.sum(F_total * mask, axis=0)  # Sum over j != i (4)
+    # 1PN corrections
+    F_1PN_pos = (4 * phi - v_sq)[...,None] * r_vec
+    F_1PN_vel = 4 * r_dot_v[...,None] * v_rel
+    F_1PN = (G * mass_prod[...,None] / c**2
+             / r_mag[...,None]**3) * (F_1PN_pos + F_1PN_vel)
 
-        acc[i] = F_total / masses[i]  # Acceleration (4)
-    return acc
+    # Total spatial force, summing over j ≠ i
+    F_total = np.sum(F_newt + F_1PN, axis=1)         # (n,3)
+    return F_total / masses[:,None]                  # (n,3)
 
 def update_particles(pos, vel, masses, dt):
     acc = compute_four_accelerations(pos, vel, masses)
